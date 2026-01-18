@@ -24,6 +24,8 @@ class CreatePropertyUseCase {
     required double price,
     String? locationUrl,
     required String? ownerPhoneEncryptedOrHiddenStored,
+    required String? securityGuardPhoneEncryptedOrHiddenStored,
+    required String? securityNumberEncryptedOrHiddenStored,
     required bool isImagesHidden,
     required List<String> imageUrls,
     required String? coverImageUrl,
@@ -46,6 +48,10 @@ class CreatePropertyUseCase {
       price: price,
       locationUrl: locationUrl,
       ownerPhoneEncryptedOrHiddenStored: ownerPhoneEncryptedOrHiddenStored,
+      securityGuardPhoneEncryptedOrHiddenStored:
+          securityGuardPhoneEncryptedOrHiddenStored,
+      securityNumberEncryptedOrHiddenStored:
+          securityNumberEncryptedOrHiddenStored,
       isImagesHidden: isImagesHidden,
       imageUrls: imageUrls,
       coverImageUrl: coverImageUrl,

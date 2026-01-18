@@ -1,10 +1,11 @@
 import 'dart:io';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'package:real_state/core/errors/localized_exception.dart';
 import 'package:real_state/features/models/entities/property.dart';
 import 'package:real_state/features/properties/domain/services/pdf_property_builder.dart';
@@ -17,6 +18,8 @@ class PropertyShareService {
   final PdfPropertyBuilder _pdfBuilder;
   Uint8List? _logoBytes;
   pw.Font? _arabicFont;
+  pw.Font? _arabicFontBold;
+  final Map<String, PdfImageData> _imageCache = {};
 
   PropertyShareService({
     BaseCacheManager? cacheManager,
@@ -35,7 +38,13 @@ class PropertyShareService {
     }
     final files = <XFile>[];
     _reportProgress(onProgress, PropertyShareStage.generatingPdf);
-    for (final url in urls) {
+    for (var i = 0; i < urls.length; i++) {
+      _reportProgressFraction(
+        onProgress,
+        PropertyShareStage.generatingPdf,
+        (i / urls.length).clamp(0.0, 1.0),
+      );
+      final url = urls[i];
       final file = await _loadImageFile(url);
       if (file != null) {
         files.add(XFile(file.path));
@@ -62,13 +71,28 @@ class PropertyShareService {
       property: property,
       localeCode: localeCode,
       includeImages: includeImages,
+      onProgress: onProgress,
     );
     _reportProgress(onProgress, PropertyShareStage.generatingPdf);
-    await Printing.sharePdf(
-      bytes: pdfBytes,
-      filename: '${property.title ?? 'property'.tr()}.pdf',
-    );
+
+    // FIX 5: Write to real temp file so Gmail sees correct filename (not UUID)
+    final title = property.title?.trim();
+    final fileName = title?.isNotEmpty == true
+        ? '$title.pdf'
+        : '${'property'.tr()}.pdf';
+
+    final tempDir = await getTemporaryDirectory();
+    final shareDir = Directory('${tempDir.path}/share_pdfs');
+    if (!await shareDir.exists()) {
+      await shareDir.create(recursive: true);
+    }
+    final tempFile = File('${shareDir.path}/$fileName');
+    await tempFile.writeAsBytes(pdfBytes);
+    final file = XFile(tempFile.path);
+
     _reportProgress(onProgress, PropertyShareStage.uploadingSharing);
+    // ignore: deprecated_member_use
+    await Share.shareXFiles([file], text: 'share_details_pdf'.tr());
     _reportProgress(onProgress, PropertyShareStage.finalizing);
   }
 
@@ -78,16 +102,31 @@ class PropertyShareService {
     bool includeImages = true,
     PropertyShareProgressCallback? onProgress,
   }) async {
+    final stopwatch = Stopwatch()..start();
     final titleText = property.title?.isNotEmpty == true
         ? property.title!
         : 'property'.tr();
     final descriptionText = property.description ?? '';
     _reportProgress(onProgress, PropertyShareStage.preparingData);
     final images = includeImages
-        ? await _loadImagesOrThrow(_collectImageUrls(property))
+        ? await _loadImagesOrThrow(
+            _collectImageUrls(property),
+            onProgress: onProgress,
+          )
         : const <PdfImageData>[];
+    if (kDebugMode) {
+      debugPrint(
+        'share_pdf: loaded ${images.length} images in ${stopwatch.elapsedMilliseconds}ms',
+      );
+    }
     final logoBytes = await _loadLogoBytes();
     final arabicFont = await _loadArabicFont();
+    final arabicFontBold = await _loadArabicFontBold();
+    if (kDebugMode) {
+      debugPrint(
+        'share_pdf: logo/font ready in ${stopwatch.elapsedMilliseconds}ms',
+      );
+    }
     final pdfBytes = await _pdfBuilder.build(
       property: property,
       titleText: titleText,
@@ -97,7 +136,11 @@ class PropertyShareService {
       images: images,
       logoBytes: logoBytes,
       arabicFont: arabicFont,
+      arabicFontBold: arabicFontBold ?? arabicFont,
     );
+    if (kDebugMode) {
+      debugPrint('share_pdf: pdf built in ${stopwatch.elapsedMilliseconds}ms');
+    }
     _reportProgress(onProgress, PropertyShareStage.generatingPdf);
     return pdfBytes;
   }
@@ -121,23 +164,37 @@ class PropertyShareService {
     }
   }
 
-  Future<List<PdfImageData>> _loadImagesOrThrow(List<String> urls) async {
+  Future<List<PdfImageData>> _loadImagesOrThrow(
+    List<String> urls, {
+    PropertyShareProgressCallback? onProgress,
+  }) async {
     final images = <PdfImageData>[];
-    for (final url in urls) {
+    for (var i = 0; i < urls.length; i++) {
       try {
+        _reportProgressFraction(
+          onProgress,
+          PropertyShareStage.preparingData,
+          (i / urls.length).clamp(0.0, 1.0),
+        );
+        final url = urls[i];
+        final cachedImage = _imageCache[url];
+        if (cachedImage != null) {
+          images.add(cachedImage);
+          continue;
+        }
         final file = await _loadImageFile(url);
         if (file == null) throw const LocalizedException('unable_load_images');
         final bytes = await file.readAsBytes();
-        final decoded = img.decodeImage(bytes);
+        final decoded = await compute(_decodeImageDimensions, bytes);
         if (decoded == null)
           throw const LocalizedException('unable_load_images');
-        images.add(
-          PdfImageData(
-            bytes: bytes,
-            width: decoded.width.toDouble(),
-            height: decoded.height.toDouble(),
-          ),
+        final data = PdfImageData(
+          bytes: bytes,
+          width: decoded[0].toDouble(),
+          height: decoded[1].toDouble(),
         );
+        _imageCache[url] = data;
+        images.add(data);
       } catch (_) {
         throw const LocalizedException('unable_load_images');
       }
@@ -169,6 +226,19 @@ class PropertyShareService {
     }
   }
 
+  Future<pw.Font?> _loadArabicFontBold() async {
+    if (_arabicFontBold != null) return _arabicFontBold;
+    try {
+      final data = await rootBundle.load(
+        'assets/fonts/noto_sans_arabic/NotoSansArabic-Regular.ttf',
+      );
+      _arabicFontBold = pw.Font.ttf(data);
+      return _arabicFontBold;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _reportProgress(
     PropertyShareProgressCallback? onProgress,
     PropertyShareStage stage,
@@ -178,4 +248,19 @@ class PropertyShareService {
       PropertyShareProgress(stage: stage, fraction: stage.defaultFraction()),
     );
   }
+
+  void _reportProgressFraction(
+    PropertyShareProgressCallback? onProgress,
+    PropertyShareStage stage,
+    double fraction,
+  ) {
+    if (onProgress == null) return;
+    onProgress(PropertyShareProgress(stage: stage, fraction: fraction));
+  }
+}
+
+List<int>? _decodeImageDimensions(Uint8List bytes) {
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return [decoded.width, decoded.height];
 }

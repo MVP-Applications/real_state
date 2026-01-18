@@ -1,22 +1,19 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:real_state/core/constants/app_images.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:real_state/core/components/app_snackbar.dart';
-import 'package:real_state/features/auth/domain/repositories/auth_repository_domain.dart';
-import 'package:real_state/features/brokers/domain/usecases/get_broker_areas_usecase.dart';
 import 'package:real_state/features/brokers/presentation/bloc/areas/broker_areas_bloc.dart';
 import 'package:real_state/features/categories/presentation/cubit/categories_cubit.dart';
 import 'package:real_state/features/categories/presentation/pages/categories_filter_page.dart';
-import 'package:real_state/features/company_areas/domain/usecases/get_company_areas_usecase.dart';
 import 'package:real_state/features/company_areas/presentation/bloc/company_areas_bloc.dart';
 import 'package:real_state/features/company_areas/presentation/bloc/company_areas_event.dart';
-import 'package:real_state/features/location/domain/usecases/get_location_areas_usecase.dart';
 import 'package:real_state/features/main_shell/presentation/pages/home_page.dart';
 import 'package:real_state/features/main_shell/presentation/widgets/liquid_glass_bottom_bar.dart';
 import 'package:real_state/features/main_shell/presentation/widgets/liquid_glass_bottom_bar_tab.dart';
-import 'package:real_state/features/properties/domain/repositories/properties_repository.dart';
-import 'package:real_state/features/properties/presentation/bloc/property_mutations_bloc.dart';
-import 'package:real_state/features/properties/presentation/bloc/property_mutations_state.dart';
+import 'package:real_state/features/properties/presentation/side_effects/property_mutations_bloc.dart';
+import 'package:real_state/features/properties/domain/models/property_mutation.dart';
+import 'package:real_state/features/properties/presentation/side_effects/property_mutations_state.dart';
 import 'package:real_state/features/settings/presentation/pages/settings_page.dart';
 
 class BottomTabController {
@@ -37,7 +34,6 @@ class _MainShellPageState extends State<MainShellPage>
     with SingleTickerProviderStateMixin {
   late final CompanyAreasBloc _companyAreasBloc;
   late final BrokerAreasBloc _brokerAreasBloc;
-  late final CategoriesCubit _categoriesCubit;
   late final List<Widget> _pages;
   final List<PropertyMutation> _pendingMutations = [];
   int? _lastHandledMutationTick;
@@ -60,7 +56,6 @@ class _MainShellPageState extends State<MainShellPage>
     BottomTabController.controller.removeListener(_handleTabChange);
     _companyAreasBloc.close();
     _brokerAreasBloc.close();
-    _categoriesCubit.close();
     super.dispose();
   }
 
@@ -82,26 +77,12 @@ class _MainShellPageState extends State<MainShellPage>
   }
 
   void _initializeCubits() {
-    _companyAreasBloc = CompanyAreasBloc(
-      context.read<GetCompanyAreasUseCase>(),
-      context.read<PropertyMutationsBloc>(),
-    )..add(const CompanyAreasRequested());
+    final createCompanyAreasBloc = context.read<CompanyAreasBloc Function()>();
+    final createBrokerAreasBloc = context.read<BrokerAreasBloc Function()>();
 
-    _brokerAreasBloc = BrokerAreasBloc(
-      context.read<GetBrokerAreasUseCase>(),
-      context.read<AuthRepositoryDomain>(),
-      context.read<PropertyMutationsBloc>(),
-    );
-
-    _categoriesCubit =
-        CategoriesCubit(
-            context.read<PropertiesRepository>(),
-            context.read<GetLocationAreasUseCase>(),
-            context.read<PropertyMutationsBloc>(),
-            context.read<AuthRepositoryDomain>(),
-          )
-          ..loadFirstPage()
-          ..loadLocations();
+    _companyAreasBloc = createCompanyAreasBloc()
+      ..add(const CompanyAreasRequested());
+    _brokerAreasBloc = createBrokerAreasBloc();
   }
 
   @override
@@ -112,7 +93,6 @@ class _MainShellPageState extends State<MainShellPage>
           providers: [
             BlocProvider<CompanyAreasBloc>.value(value: _companyAreasBloc),
             BlocProvider<BrokerAreasBloc>.value(value: _brokerAreasBloc),
-            BlocProvider<CategoriesCubit>.value(value: _categoriesCubit),
           ],
           child: BlocListener<PropertyMutationsBloc, PropertyMutationsState>(
             listener: _handleMutation,
@@ -132,15 +112,15 @@ class _MainShellPageState extends State<MainShellPage>
                         tabs: [
                           LiquidGlassTabItem(
                             label: 'home'.tr(),
-                            icon: Icons.home_outlined,
+                            svgAsset: AppSVG.home,
                           ),
                           LiquidGlassTabItem(
-                            label: 'filter'.tr(),
-                            icon: Icons.filter_alt_outlined,
+                            label: 'categories'.tr(),
+                            svgAsset: AppSVG.filter,
                           ),
                           LiquidGlassTabItem(
                             label: 'settings'.tr(),
-                            icon: Icons.settings_outlined,
+                            svgAsset: AppSVG.settings,
                           ),
                         ],
                         indicatorColor: Colors.black.withValues(alpha: 0.04),
